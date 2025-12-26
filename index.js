@@ -21,11 +21,37 @@ if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
 }
 
 const app = express();
+
+/**
+ * ✅ FIX #1:
+ * Twilio sends webhook payloads as application/x-www-form-urlencoded by default.
+ * If you only parse JSON, req.body will be empty and some flows break.
+ */
+app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
 // Health check
 app.get('/health', (req, res) => {
   res.json({ ok: true });
+});
+
+/**
+ * ✅ FIX #2 (YOUR MAIN ISSUE):
+ * Twilio is POSTing to /voice but your server didn’t have that route,
+ * so Twilio got "Cannot POST /voice" (404).
+ *
+ * This route returns TwiML (XML) so Twilio knows what to do with the call.
+ */
+app.post('/voice', (req, res) => {
+  // Helpful debug logs (will show in Railway logs)
+  console.log('📞 Twilio /voice webhook hit');
+  console.log('From:', req.body.From, 'To:', req.body.To, 'CallSid:', req.body.CallSid);
+
+  res.type('text/xml');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">Hello. Callvero backend is connected.</Say>
+</Response>`);
 });
 
 const store = {
@@ -67,30 +93,38 @@ app.post('/create_order', (req, res) => {
     return res.status(400).json({ error: 'cart is required' });
   }
 
-  let total = 0;
-  const items = cart.map(({ id, quantity }) => {
-    const menuItem = store.menu.find(m => m.id === id);
-    if (!menuItem) throw new Error('Unknown item');
-    total += menuItem.price * (quantity || 1);
-    return { ...menuItem, quantity: quantity || 1 };
-  });
+  try {
+    let total = 0;
+    const items = cart.map(({ id, quantity }) => {
+      const menuItem = store.menu.find(m => m.id === id);
+      if (!menuItem) throw new Error('Unknown item');
+      total += menuItem.price * (quantity || 1);
+      return { ...menuItem, quantity: quantity || 1 };
+    });
 
-  const order = {
-    id: Date.now(),
-    items,
-    total,
-    type,
-    customer: { phone: customerPhone, name: customerName },
-    status: 'CREATED',
-  };
+    const order = {
+      id: Date.now(),
+      items,
+      total,
+      type,
+      customer: { phone: customerPhone, name: customerName },
+      status: 'CREATED',
+    };
 
-  res.json({ order });
+    res.json({ order });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.post('/send_sms', async (req, res) => {
   const { to, link } = req.body;
   if (!to || !link) return res.status(400).json({ error: 'to and link required' });
   if (!twilioClient) return res.status(500).json({ error: 'SMS not configured' });
+
+  if (!process.env.TWILIO_FROM_NUMBER) {
+    return res.status(500).json({ error: 'TWILIO_FROM_NUMBER is not set' });
+  }
 
   try {
     const message = await twilioClient.messages.create({
