@@ -2,7 +2,6 @@
  * Callvero Backend (Express)
  *
  * Lightweight backend for a voice-enabled business phone agent.
- * Safe, neutral naming (no Loman references).
  */
 
 const express = require('express');
