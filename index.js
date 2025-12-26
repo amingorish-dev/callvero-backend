@@ -30,6 +30,13 @@ const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path === '/health') {
+    console.log(`Health check hit: ${req.method} ${req.path}`);
+  }
+  next();
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ ok: true });
@@ -147,6 +154,6 @@ app.post('/handoff', (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => {
+app.listen(port, '0.0.0.0', () => {
   console.log(`Callvero backend listening on port ${port}`);
 });
