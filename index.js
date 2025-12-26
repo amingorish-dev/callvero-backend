@@ -34,6 +34,10 @@ app.use(bodyParser.json());
 app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
+// Default root for platform health checks
+app.get('/', (req, res) => {
+  res.status(200).send('ok');
+});
 
 /**
  * ✅ FIX #2 (YOUR MAIN ISSUE):
