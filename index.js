@@ -6,11 +6,11 @@
 
 const express = require('express');
 const bodyParser = require('body-parser');
-const twilio = require('twilio'); // ✅ needed for TwiML builder + client
 
 let twilioClient = null;
 if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
   try {
+    const twilio = require('twilio');
     twilioClient = twilio(
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_AUTH_TOKEN
@@ -20,10 +20,12 @@ if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
   }
 }
 
+const twilio = require('twilio'); // ✅ needed for TwiML
+
 const app = express();
 
 /**
- * Twilio sends webhook payloads as application/x-www-form-urlencoded by default.
+ * ✅ Twilio sends webhook payloads as application/x-www-form-urlencoded by default.
  */
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
@@ -46,40 +48,49 @@ app.get('/', (req, res) => {
 });
 
 /**
- * ✅ VAPI STREAMING FIX:
- * Twilio inbound call webhook -> stream audio to Vapi via <Connect><Stream>.
+ * ✅ MAIN: Twilio Voice Webhook -> Vapi Streaming via <Connect><Stream>
  *
- * Requires Railway env var:
- *   VAPI_STREAM_URL = wss://api.vapi.ai/stream/twilio   (or the exact Vapi URL you use)
+ * Requires Railway env vars:
+ *   VAPI_API_KEY      = (your Vapi PRIVATE key)
+ *   VAPI_STREAM_URL   = wss://api.vapi.ai/stream/twilio
  */
 app.post('/voice', (req, res) => {
-  console.log('📞 Twilio /voice webhook hit');
+  console.log('📞 Twilio /voice webhook hit (streaming to Vapi)');
   console.log('From:', req.body.From, 'To:', req.body.To, 'CallSid:', req.body.CallSid);
+
+  if (!process.env.VAPI_STREAM_URL) {
+    console.error('❌ Missing VAPI_STREAM_URL env var');
+  }
+  if (!process.env.VAPI_API_KEY) {
+    console.error('❌ Missing VAPI_API_KEY env var (use Vapi PRIVATE key)');
+  }
 
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
 
-  const streamUrl = process.env.VAPI_STREAM_URL;
-
-  // If not configured, tell caller clearly (helps debugging)
-  if (!streamUrl) {
-    twiml.say({ voice: 'alice' }, 'The AI stream is not configured yet. Please try again later.');
-    twiml.hangup();
-    return res.type('text/xml').send(twiml.toString());
-  }
-
-  // Optional quick greeting
   twiml.say({ voice: 'alice' }, 'Connecting you to our AI assistant now.');
 
-  // Stream call audio to Vapi
   const connect = twiml.connect();
-  connect.stream({
-    url: streamUrl,
-    name: 'callvero-vapi-stream',
+
+  // Twilio <Stream> to Vapi WebSocket
+  const stream = connect.stream({
+    url: process.env.VAPI_STREAM_URL || 'wss://api.vapi.ai/stream/twilio',
   });
 
-  // Respond with TwiML
-  res.type('text/xml').send(twiml.toString());
+  // 🔐 Auth for Vapi (server-to-server)
+  stream.parameter({
+    name: 'vapi_api_key',
+    value: process.env.VAPI_API_KEY || '',
+  });
+
+  // Optional metadata (useful for debugging / routing)
+  stream.parameter({ name: 'assistant', value: 'Callvero AI Phone Agent' });
+  stream.parameter({ name: 'callSid', value: req.body.CallSid || '' });
+  stream.parameter({ name: 'from', value: req.body.From || '' });
+  stream.parameter({ name: 'to', value: req.body.To || '' });
+
+  res.type('text/xml');
+  res.send(twiml.toString());
 });
 
 const store = {
@@ -110,7 +121,7 @@ app.post('/search_menu', (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: 'query is required' });
   const results = store.menu.filter(i =>
-    i.name.toLowerCase().includes(String(query).toLowerCase())
+    i.name.toLowerCase().includes(query.toLowerCase())
   );
   res.json({ results });
 });
