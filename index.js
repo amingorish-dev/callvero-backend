@@ -1,6 +1,10 @@
 /*
  * Callvero Backend (Express)
  * Twilio -> (WSS) -> Your Railway Server -> (WSS) -> Vapi
+ *
+ * FIX: Stop weird idle sound by ONLY forwarding Vapi BINARY audio frames.
+ * Many Vapi WS messages are TEXT (JSON events) and can arrive as Buffer;
+ * forwarding those to Twilio produces the weird sound.
  */
 
 const express = require("express");
@@ -214,6 +218,17 @@ async function createVapiWebsocketCallUrl() {
   return wsUrl;
 }
 
+// Optional: also reject buffers that look like text (extra safety)
+function bufferLooksLikeText(buf) {
+  // If most bytes are printable ASCII, it's probably text JSON, not audio
+  let printable = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i];
+    if (b === 9 || b === 10 || b === 13 || (b >= 32 && b <= 126)) printable++;
+  }
+  return printable / buf.length > 0.85;
+}
+
 /**
  * ✅ WebSocket server for Twilio Media Streams
  */
@@ -227,9 +242,6 @@ wss.on("connection", (twilioWs) => {
   let vapiWs = null;
   let vapiReady = false;
 
-  // Keep a small "last sent" guard to avoid bursts
-  const MIN_AUDIO_BYTES = 160; // ~20ms mulaw @ 8k (roughly)
-
   const cleanup = () => {
     try { twilioWs.close(); } catch {}
     try { vapiWs?.close(); } catch {}
@@ -237,11 +249,13 @@ wss.on("connection", (twilioWs) => {
 
   const sendToTwilio = (audioBuf) => {
     if (!streamSid) return;
-    twilioWs.send(JSON.stringify({
-      event: "media",
-      streamSid,
-      media: { payload: audioBuf.toString("base64") },
-    }));
+    twilioWs.send(
+      JSON.stringify({
+        event: "media",
+        streamSid,
+        media: { payload: audioBuf.toString("base64") },
+      })
+    );
   };
 
   twilioWs.on("message", async (raw) => {
@@ -267,16 +281,20 @@ wss.on("connection", (twilioWs) => {
           console.log("✅ Vapi WS connected");
         });
 
-        vapiWs.on("message", (data) => {
+        // ✅ Vapi -> Twilio
+        // IMPORTANT: only forward TRUE binary audio frames.
+        vapiWs.on("message", (data, isBinary) => {
           if (!streamSid) return;
 
-          // ✅ Only forward binary audio buffers
-          if (!Buffer.isBuffer(data)) return;
+          // If ws provides isBinary, use it.
+          // Only forward binary frames (audio).
+          if (typeof isBinary === "boolean" && !isBinary) return;
 
-          // ✅ Drop tiny frames / keepalives (often cause crackle)
-          if (data.length < MIN_AUDIO_BYTES) return;
+          if (!Buffer.isBuffer(data) || data.length === 0) return;
 
-          // ✅ Twilio expects mulaw bytes base64
+          // Extra safety: don't forward text-y buffers even if they come as Buffer
+          if (bufferLooksLikeText(data)) return;
+
           sendToTwilio(data);
         });
 
