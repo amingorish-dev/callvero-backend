@@ -20,12 +20,10 @@ if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
   }
 }
 
-const twilio = require('twilio'); // ✅ needed for TwiML
-
 const app = express();
 
 /**
- * ✅ Twilio sends webhook payloads as application/x-www-form-urlencoded by default.
+ * Twilio sends webhook payloads as application/x-www-form-urlencoded by default.
  */
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
@@ -48,50 +46,70 @@ app.get('/', (req, res) => {
 });
 
 /**
- * ✅ MAIN: Twilio Voice Webhook -> Vapi Streaming via <Connect><Stream>
+ * ✅ FINAL /voice ROUTE (Vapi streaming)
  *
- * Requires Railway env vars:
- *   VAPI_API_KEY      = (your Vapi PRIVATE key)
- *   VAPI_STREAM_URL   = wss://api.vapi.ai/stream/twilio
+ * Twilio hits this endpoint on incoming call.
+ * We respond with TwiML that:
+ *  - Says "connecting..."
+ *  - Streams audio to Vapi over WebSocket (Media Streams)
+ *
+ * IMPORTANT:
+ *  - Use Vapi PUBLIC key here (since it is included in TwiML).
+ *  - Stream URL should be: wss://api.vapi.ai/stream (NOT /stream/twilio)
+ *  - apiKey parameter name should be: apiKey (NOT vapi_api_key)
  */
 app.post('/voice', (req, res) => {
-  console.log('📞 Twilio /voice webhook hit (streaming to Vapi)');
-  console.log('From:', req.body.From, 'To:', req.body.To, 'CallSid:', req.body.CallSid);
+  const from = req.body.From || '';
+  const to = req.body.To || '';
+  const callSid = req.body.CallSid || '';
 
-  if (!process.env.VAPI_STREAM_URL) {
-    console.error('❌ Missing VAPI_STREAM_URL env var');
+  console.log('📞 Twilio /voice webhook hit');
+  console.log('From:', from, 'To:', to, 'CallSid:', callSid);
+
+  const VAPI_API_KEY = process.env.VAPI_API_KEY; // ✅ use PUBLIC key
+  const VAPI_ASSISTANT_ID = process.env.VAPI_ASSISTANT_ID || ''; // optional, but recommended
+
+  if (!VAPI_API_KEY) {
+    res.type('text/xml');
+    return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">Vapi API key is missing on the server. Please set VAPI_API_KEY.</Say>
+</Response>`);
   }
-  if (!process.env.VAPI_API_KEY) {
-    console.error('❌ Missing VAPI_API_KEY env var (use Vapi PRIVATE key)');
-  }
 
-  const VoiceResponse = twilio.twiml.VoiceResponse;
-  const twiml = new VoiceResponse();
+  // Build TwiML
+  // Stream URL + apiKey parameter format based on known working example. :contentReference[oaicite:2]{index=2}
+  const assistantParam = VAPI_ASSISTANT_ID
+    ? `    <Parameter name="assistantId" value="${escapeXml(VAPI_ASSISTANT_ID)}" />\n`
+    : '';
 
-  twiml.say({ voice: 'alice' }, 'Connecting you to our AI assistant now.');
-
-  const connect = twiml.connect();
-
-  // Twilio <Stream> to Vapi WebSocket
-  const stream = connect.stream({
-    url: process.env.VAPI_STREAM_URL || 'wss://api.vapi.ai/stream/twilio',
-  });
-
-  // 🔐 Auth for Vapi (server-to-server)
-  stream.parameter({
-    name: 'vapi_api_key',
-    value: process.env.VAPI_API_KEY || '',
-  });
-
-  // Optional metadata (useful for debugging / routing)
-  stream.parameter({ name: 'assistant', value: 'Callvero AI Phone Agent' });
-  stream.parameter({ name: 'callSid', value: req.body.CallSid || '' });
-  stream.parameter({ name: 'from', value: req.body.From || '' });
-  stream.parameter({ name: 'to', value: req.body.To || '' });
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">Connecting you to our AI assistant now.</Say>
+  <Connect>
+    <Stream url="wss://api.vapi.ai/stream">
+      <Parameter name="apiKey" value="${escapeXml(VAPI_API_KEY)}" />
+${assistantParam}      <Parameter name="callerId" value="${escapeXml(from)}" />
+      <Parameter name="callSid" value="${escapeXml(callSid)}" />
+      <Parameter name="from" value="${escapeXml(from)}" />
+      <Parameter name="to" value="${escapeXml(to)}" />
+    </Stream>
+  </Connect>
+</Response>`;
 
   res.type('text/xml');
-  res.send(twiml.toString());
+  res.send(twiml);
 });
+
+// small helper for XML safety
+function escapeXml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 
 const store = {
   id: 1,
