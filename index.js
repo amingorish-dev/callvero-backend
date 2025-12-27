@@ -6,11 +6,11 @@
 
 const express = require('express');
 const bodyParser = require('body-parser');
+const twilio = require('twilio'); // ✅ needed for TwiML builder + client
 
 let twilioClient = null;
 if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
   try {
-    const twilio = require('twilio');
     twilioClient = twilio(
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_AUTH_TOKEN
@@ -23,9 +23,7 @@ if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
 const app = express();
 
 /**
- * ✅ FIX #1:
  * Twilio sends webhook payloads as application/x-www-form-urlencoded by default.
- * If you only parse JSON, req.body will be empty and some flows break.
  */
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
@@ -41,28 +39,47 @@ app.use((req, res, next) => {
 app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
+
 // Default root for platform health checks
 app.get('/', (req, res) => {
   res.status(200).send('ok');
 });
 
 /**
- * ✅ FIX #2 (YOUR MAIN ISSUE):
- * Twilio is POSTing to /voice but your server didn’t have that route,
- * so Twilio got "Cannot POST /voice" (404).
+ * ✅ VAPI STREAMING FIX:
+ * Twilio inbound call webhook -> stream audio to Vapi via <Connect><Stream>.
  *
- * This route returns TwiML (XML) so Twilio knows what to do with the call.
+ * Requires Railway env var:
+ *   VAPI_STREAM_URL = wss://api.vapi.ai/stream/twilio   (or the exact Vapi URL you use)
  */
 app.post('/voice', (req, res) => {
-  // Helpful debug logs (will show in Railway logs)
   console.log('📞 Twilio /voice webhook hit');
   console.log('From:', req.body.From, 'To:', req.body.To, 'CallSid:', req.body.CallSid);
 
-  res.type('text/xml');
-  res.send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice">Hello. Callvero backend is connected.</Say>
-</Response>`);
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const twiml = new VoiceResponse();
+
+  const streamUrl = process.env.VAPI_STREAM_URL;
+
+  // If not configured, tell caller clearly (helps debugging)
+  if (!streamUrl) {
+    twiml.say({ voice: 'alice' }, 'The AI stream is not configured yet. Please try again later.');
+    twiml.hangup();
+    return res.type('text/xml').send(twiml.toString());
+  }
+
+  // Optional quick greeting
+  twiml.say({ voice: 'alice' }, 'Connecting you to our AI assistant now.');
+
+  // Stream call audio to Vapi
+  const connect = twiml.connect();
+  connect.stream({
+    url: streamUrl,
+    name: 'callvero-vapi-stream',
+  });
+
+  // Respond with TwiML
+  res.type('text/xml').send(twiml.toString());
 });
 
 const store = {
@@ -93,7 +110,7 @@ app.post('/search_menu', (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: 'query is required' });
   const results = store.menu.filter(i =>
-    i.name.toLowerCase().includes(query.toLowerCase())
+    i.name.toLowerCase().includes(String(query).toLowerCase())
   );
   res.json({ results });
 });
