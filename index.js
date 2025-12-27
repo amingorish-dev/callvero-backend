@@ -1,11 +1,6 @@
 /*
  * Callvero Backend (Express)
  * Twilio -> (WSS) -> Your Railway Server -> (WSS) -> Vapi
- *
- * FIX: Remove weird idle sound (comfort-noise) when AI is waiting.
- * We do this by:
- *  1) Re-chunking Vapi audio into steady 160-byte frames (20ms mulaw @ 8k)
- *  2) Dropping frames that look like silence/comfort-noise (mostly identical bytes)
  */
 
 const express = require("express");
@@ -214,20 +209,9 @@ async function createVapiWebsocketCallUrl() {
 
   const wsUrl = data?.transport?.websocketCallUrl;
   if (!wsUrl) {
-    throw new Error(
-      `Vapi did not return transport.websocketCallUrl. Response: ${text}`
-    );
+    throw new Error(`Vapi did not return transport.websocketCallUrl. Response: ${text}`);
   }
   return wsUrl;
-}
-
-// Comfort-noise / silence filter for mulaw frames
-function isMostlySilenceMuLaw(buf) {
-  if (!Buffer.isBuffer(buf) || buf.length === 0) return true;
-  const first = buf[0];
-  let same = 0;
-  for (let i = 1; i < buf.length; i++) if (buf[i] === first) same++;
-  return same / (buf.length - 1) > 0.92;
 }
 
 /**
@@ -243,28 +227,21 @@ wss.on("connection", (twilioWs) => {
   let vapiWs = null;
   let vapiReady = false;
 
-  // --- Smooth outbound audio to Twilio ---
-  let outBuf = Buffer.alloc(0);
-  const FRAME_SIZE = 160; // 20ms mulaw @ 8k
+  // Keep a small "last sent" guard to avoid bursts
+  const MIN_AUDIO_BYTES = 160; // ~20ms mulaw @ 8k (roughly)
 
   const cleanup = () => {
     try { twilioWs.close(); } catch {}
     try { vapiWs?.close(); } catch {}
   };
 
-  const sendFrameToTwilio = (frame) => {
+  const sendToTwilio = (audioBuf) => {
     if (!streamSid) return;
-
-    // Drop comfort-noise / silence-like frames (fixes weird idle tone)
-    if (isMostlySilenceMuLaw(frame)) return;
-
-    twilioWs.send(
-      JSON.stringify({
-        event: "media",
-        streamSid,
-        media: { payload: frame.toString("base64") },
-      })
-    );
+    twilioWs.send(JSON.stringify({
+      event: "media",
+      streamSid,
+      media: { payload: audioBuf.toString("base64") },
+    }));
   };
 
   twilioWs.on("message", async (raw) => {
@@ -290,25 +267,20 @@ wss.on("connection", (twilioWs) => {
           console.log("✅ Vapi WS connected");
         });
 
-        // Vapi -> Twilio (audio back)
         vapiWs.on("message", (data) => {
           if (!streamSid) return;
 
-          // Only handle binary audio buffers
-          if (!Buffer.isBuffer(data) || data.length === 0) return;
+          // ✅ Only forward binary audio buffers
+          if (!Buffer.isBuffer(data)) return;
 
-          // Accumulate and send steady 160-byte frames
-          outBuf = Buffer.concat([outBuf, data]);
+          // ✅ Drop tiny frames / keepalives (often cause crackle)
+          if (data.length < MIN_AUDIO_BYTES) return;
 
-          while (outBuf.length >= FRAME_SIZE) {
-            const frame = outBuf.subarray(0, FRAME_SIZE);
-            outBuf = outBuf.subarray(FRAME_SIZE);
-            sendFrameToTwilio(frame);
-          }
+          // ✅ Twilio expects mulaw bytes base64
+          sendToTwilio(data);
         });
 
         vapiWs.on("close", () => {
-          outBuf = Buffer.alloc(0);
           console.log("🔌 Vapi WS closed");
           cleanup();
         });
