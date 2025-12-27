@@ -1,6 +1,9 @@
 /*
  * Callvero Backend (Express)
  * Twilio -> (WSS) -> Your Railway Server -> (WSS) -> Vapi
+ *
+ * FIX: Remove static when AI speaks by forcing Vapi OUTPUT to mulaw/8000
+ *      and only forwarding real audio buffers back to Twilio.
  */
 
 const express = require("express");
@@ -184,7 +187,6 @@ function needEnv(name) {
 }
 
 async function createVapiWebsocketCallUrl() {
-  // Node 18+ has global fetch. Railway typically uses Node 18+.
   if (typeof fetch !== "function") {
     throw new Error("fetch() not found. Use Node 18+ runtime.");
   }
@@ -202,7 +204,16 @@ async function createVapiWebsocketCallUrl() {
       assistantId: VAPI_ASSISTANT_ID,
       transport: {
         provider: "vapi.websocket",
+
+        // INPUT (Twilio -> Vapi): mulaw 8k
         audioFormat: {
+          format: "mulaw",
+          sampleRate: 8000,
+          container: "raw",
+        },
+
+        // OUTPUT (Vapi -> Twilio): mulaw 8k  ✅ FIXES STATIC
+        outputAudioFormat: {
           format: "mulaw",
           sampleRate: 8000,
           container: "raw",
@@ -225,7 +236,9 @@ async function createVapiWebsocketCallUrl() {
 
   const wsUrl = data?.transport?.websocketCallUrl;
   if (!wsUrl) {
-    throw new Error(`Vapi did not return transport.websocketCallUrl. Response: ${text}`);
+    throw new Error(
+      `Vapi did not return transport.websocketCallUrl. Response: ${text}`
+    );
   }
 
   return wsUrl;
@@ -236,7 +249,6 @@ async function createVapiWebsocketCallUrl() {
  * Twilio connects to: wss://callvero-backend-production.up.railway.app/twilio-stream
  */
 const server = http.createServer(app);
-
 const wss = new WebSocket.Server({ server, path: "/twilio-stream" });
 
 wss.on("connection", (twilioWs) => {
@@ -276,25 +288,21 @@ wss.on("connection", (twilioWs) => {
 
         // Vapi -> Twilio (audio back)
         vapiWs.on("message", (data) => {
-          // Vapi audio should arrive as raw bytes (Buffer)
           if (!streamSid) return;
 
-          if (Buffer.isBuffer(data)) {
-            twilioWs.send(
-              JSON.stringify({
-                event: "media",
-                streamSid,
-                media: { payload: data.toString("base64") },
-              })
-            );
-            return;
-          }
+          // ✅ Only forward real audio buffers (prevents hiss/crackle from non-audio frames)
+          if (!Buffer.isBuffer(data)) return;
 
-          // Optional: if Vapi sends JSON messages too
-          try {
-            const j = JSON.parse(data.toString());
-            if (j.type === "error") console.error("❌ Vapi error:", j);
-          } catch {}
+          // ✅ Ignore tiny keepalive frames that can sound like static bursts
+          if (data.length < 50) return;
+
+          twilioWs.send(
+            JSON.stringify({
+              event: "media",
+              streamSid,
+              media: { payload: data.toString("base64") },
+            })
+          );
         });
 
         vapiWs.on("close", () => {
