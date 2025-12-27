@@ -1,7 +1,6 @@
 /*
  * Callvero Backend (Express)
- *
- * Lightweight backend for a voice-enabled business phone agent.
+ * Twilio -> (WSS) -> Your Railway Server -> (WSS) -> Vapi
  */
 
 const express = require("express");
@@ -30,14 +29,15 @@ const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-// Health check
+// Health check (Railway uses this)
 app.get("/health", (req, res) => res.json({ ok: true }));
-
-// Default root
 app.get("/", (req, res) => res.status(200).send("ok"));
 
 /**
- * ✅ /voice ROUTE (Twilio Media Stream -> YOUR server)
+ * ✅ /voice
+ * Twilio hits this on incoming call.
+ * We return TwiML that streams audio to OUR server:
+ * wss://callvero-backend-production.up.railway.app/twilio-stream
  */
 app.post("/voice", (req, res) => {
   const from = req.body.From || "";
@@ -47,8 +47,7 @@ app.post("/voice", (req, res) => {
   console.log("📞 Twilio /voice webhook hit");
   console.log("From:", from, "To:", to, "CallSid:", callSid);
 
-  // Build YOUR websocket URL (Railway domain)
-  // This becomes: wss://callvero-backend-production.up.railway.app/twilio-stream
+  // Build websocket URL to YOUR server
   const host = req.headers["x-forwarded-host"] || req.headers.host;
   const wsUrl = `wss://${host}/twilio-stream`;
 
@@ -65,7 +64,7 @@ app.post("/voice", (req, res) => {
   </Connect>
 </Response>`;
 
-  res.type("text/xml").send(twiml);
+  res.type("text/xml").status(200).send(twiml);
 });
 
 // XML helper
@@ -166,30 +165,187 @@ app.post("/send_sms", async (req, res) => {
 app.post("/handoff", (req, res) => res.json({ success: true }));
 
 /**
- * ✅ WebSocket Server for Twilio Media Streams
- * This is the endpoint Twilio will connect to:
- * wss://callvero-backend-production.up.railway.app/twilio-stream
+ * --------------------------
+ * VAPI BRIDGE (IMPORTANT)
+ * --------------------------
+ * REQUIREMENTS (Railway variables):
+ * - VAPI_API_KEY = Vapi PRIVATE key
+ * - VAPI_ASSISTANT_ID = assistant UUID
+ *
+ * Twilio sends mulaw/8000 audio frames base64.
+ * We create a Vapi websocket call and send raw mulaw bytes.
+ * Then we forward Vapi audio bytes back to Twilio.
+ */
+
+function needEnv(name) {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
+
+async function createVapiWebsocketCallUrl() {
+  // Node 18+ has global fetch. Railway typically uses Node 18+.
+  if (typeof fetch !== "function") {
+    throw new Error("fetch() not found. Use Node 18+ runtime.");
+  }
+
+  const VAPI_API_KEY = needEnv("VAPI_API_KEY");
+  const VAPI_ASSISTANT_ID = needEnv("VAPI_ASSISTANT_ID");
+
+  const resp = await fetch("https://api.vapi.ai/call", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${VAPI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      assistantId: VAPI_ASSISTANT_ID,
+      transport: {
+        provider: "vapi.websocket",
+        audioFormat: {
+          format: "mulaw",
+          sampleRate: 8000,
+          container: "raw",
+        },
+      },
+    }),
+  });
+
+  const text = await resp.text();
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = null;
+  }
+
+  if (!resp.ok) {
+    throw new Error(`Vapi /call failed: ${resp.status} ${text}`);
+  }
+
+  const wsUrl = data?.transport?.websocketCallUrl;
+  if (!wsUrl) {
+    throw new Error(`Vapi did not return transport.websocketCallUrl. Response: ${text}`);
+  }
+
+  return wsUrl;
+}
+
+/**
+ * ✅ WebSocket server for Twilio Media Streams
+ * Twilio connects to: wss://callvero-backend-production.up.railway.app/twilio-stream
  */
 const server = http.createServer(app);
 
 const wss = new WebSocket.Server({ server, path: "/twilio-stream" });
 
-wss.on("connection", (ws) => {
+wss.on("connection", (twilioWs) => {
   console.log("✅ /twilio-stream WS CONNECTED");
 
-  ws.on("message", (raw) => {
+  let streamSid = null;
+  let vapiWs = null;
+  let vapiReady = false;
+
+  const cleanup = () => {
+    try { twilioWs.close(); } catch {}
+    try { vapiWs?.close(); } catch {}
+  };
+
+  twilioWs.on("message", async (raw) => {
+    let msg;
     try {
-      const msg = JSON.parse(raw.toString());
-      console.log("WS event:", msg.event);
+      msg = JSON.parse(raw.toString());
     } catch {
-      console.log("WS message (non-json)");
+      return;
+    }
+
+    if (msg.event === "start") {
+      streamSid = msg.start?.streamSid || null;
+      console.log("WS event: start | streamSid:", streamSid);
+
+      try {
+        const vapiUrl = await createVapiWebsocketCallUrl();
+        console.log("✅ Vapi websocketCallUrl received");
+
+        vapiWs = new WebSocket(vapiUrl);
+
+        vapiWs.on("open", () => {
+          vapiReady = true;
+          console.log("✅ Vapi WS connected");
+        });
+
+        // Vapi -> Twilio (audio back)
+        vapiWs.on("message", (data) => {
+          // Vapi audio should arrive as raw bytes (Buffer)
+          if (!streamSid) return;
+
+          if (Buffer.isBuffer(data)) {
+            twilioWs.send(
+              JSON.stringify({
+                event: "media",
+                streamSid,
+                media: { payload: data.toString("base64") },
+              })
+            );
+            return;
+          }
+
+          // Optional: if Vapi sends JSON messages too
+          try {
+            const j = JSON.parse(data.toString());
+            if (j.type === "error") console.error("❌ Vapi error:", j);
+          } catch {}
+        });
+
+        vapiWs.on("close", () => {
+          console.log("🔌 Vapi WS closed");
+          cleanup();
+        });
+
+        vapiWs.on("error", (e) => {
+          console.error("❌ Vapi WS error:", e);
+          cleanup();
+        });
+      } catch (e) {
+        console.error("❌ Failed to start Vapi call:", e.message || e);
+        cleanup();
+      }
+      return;
+    }
+
+    if (msg.event === "media") {
+      // Send caller audio -> Vapi
+      if (!vapiWs || !vapiReady) return;
+      const payload = msg.media?.payload;
+      if (!payload) return;
+
+      const audioBytes = Buffer.from(payload, "base64");
+      try {
+        vapiWs.send(audioBytes);
+      } catch (e) {
+        console.error("❌ Failed sending audio to Vapi:", e);
+      }
+      return;
+    }
+
+    if (msg.event === "stop") {
+      console.log("WS event: stop");
+      cleanup();
     }
   });
 
-  ws.on("close", () => console.log("🔌 /twilio-stream WS CLOSED"));
-  ws.on("error", (err) => console.log("❌ /twilio-stream WS ERROR", err));
+  twilioWs.on("close", () => {
+    console.log("🔌 Twilio WS closed");
+    cleanup();
+  });
+
+  twilioWs.on("error", (err) => {
+    console.error("❌ Twilio WS error:", err);
+    cleanup();
+  });
 });
 
+// Railway must listen on process.env.PORT
 const port = process.env.PORT || 3000;
 server.listen(port, "0.0.0.0", () => {
   console.log(`Callvero backend listening on port ${port}`);
