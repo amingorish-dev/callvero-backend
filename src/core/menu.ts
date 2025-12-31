@@ -60,7 +60,7 @@ export type SelectionModifier = {
 export type Selection = {
   itemId: string;
   quantity: number;
-  modifiers: SelectionModifier[];
+  modifiers?: SelectionModifier[];
   specialInstructions?: string;
 };
 

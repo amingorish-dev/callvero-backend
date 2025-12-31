@@ -25,7 +25,7 @@ const searchSchema = z.object({
   query: z.string().min(1),
 });
 
-const selectionSchema: z.ZodType<Selection> = z.object({
+const selectionSchema = z.object({
   itemId: z.string().min(1),
   quantity: z.number().int().min(1),
   modifiers: z

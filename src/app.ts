@@ -8,7 +8,7 @@ import { VAPI_SYSTEM_PROMPT } from "./core/vapiPrompt";
 export function createApp() {
   const app = express();
 
-  app.use(pinoHttp({ logger }));
+  app.use(pinoHttp());
   app.use(express.urlencoded({ extended: false }));
   app.use(express.json());
 
