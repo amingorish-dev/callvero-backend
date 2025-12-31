@@ -6,6 +6,7 @@ import { config } from "../core/config";
 import { requireRestaurantById } from "../core/tenant";
 import { db } from "../db/client";
 import { exchangeCloverCode } from "../clover/auth";
+import { syncCloverMenu } from "../clover/menu";
 
 export const cloverRouter = Router();
 
@@ -16,6 +17,10 @@ const callbackSchema = z.object({
   restaurant_id: z.string().uuid().optional(),
   error: z.string().optional(),
   error_description: z.string().optional(),
+});
+
+const syncMenuSchema = z.object({
+  restaurant_id: z.string().uuid(),
 });
 
 function resolveRedirectUri(req: { headers: Record<string, string | string[] | undefined> }) {
@@ -108,6 +113,27 @@ cloverRouter.get("/clover/callback", async (req, res, next) => {
       restaurant_id: restaurantId,
       merchant_id: merchantId,
       token_expires_at: expiresAt.toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+cloverRouter.post("/clover/sync_menu", async (req, res, next) => {
+  try {
+    const body = parseOrThrow(syncMenuSchema, req.body);
+    const restaurant = await requireRestaurantById(body.restaurant_id);
+
+    if (restaurant.pos_provider !== "clover") {
+      await db.query("UPDATE restaurants SET pos_provider = $1 WHERE id = $2", ["clover", body.restaurant_id]);
+    }
+
+    const result = await syncCloverMenu(body.restaurant_id);
+    res.json({
+      status: "ok",
+      restaurant_id: body.restaurant_id,
+      menu_version: result.version,
+      counts: result.counts,
     });
   } catch (error) {
     next(error);

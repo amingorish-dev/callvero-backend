@@ -95,6 +95,7 @@ All tool requests must include `restaurant_id` and are validated against tenant 
 - `POST /tools/submit_order { restaurant_id, order_id, client_order_id }`
 - `POST /tools/send_sms { to, message }`
 - `GET  /clover/callback?code=...&merchant_id=...&state=<restaurant_id>` (OAuth callback)
+- `POST /clover/sync_menu { restaurant_id }` (imports Clover inventory into normalized menu)
 
 ## Normalized menu format
 Stored in `menus.normalized_json`.
