@@ -162,14 +162,42 @@ async function fetchModifierOptionsForGroup(
   groupId: string,
   token: string
 ): Promise<CloverModifierOption[]> {
-  return fetchWithFallback<CloverModifierOption>(
-    baseUrl,
-    [
-      `/v3/merchants/${merchantId}/modifier_groups/${groupId}/modifier_options`,
-      `/v3/merchants/${merchantId}/modifier_groups/${groupId}/modifierOptions`,
-    ],
-    token
-  );
+  try {
+    const payload = await cloverGet(
+      baseUrl,
+      `/v3/merchants/${merchantId}/modifier_groups/${groupId}?expand=modifierOptions`,
+      token
+    );
+    const group = payload as CloverModifierGroup;
+    const options = extractElements<CloverModifierOption>(group.modifierOptions);
+    if (options.length > 0) {
+      return options;
+    }
+  } catch (error) {
+    const apiError = error as ApiError;
+    const status = (apiError?.details as any)?.status;
+    if (status !== 404 && status !== 405) {
+      throw error;
+    }
+  }
+
+  try {
+    return await fetchWithFallback<CloverModifierOption>(
+      baseUrl,
+      [
+        `/v3/merchants/${merchantId}/modifier_groups/${groupId}/modifier_options`,
+        `/v3/merchants/${merchantId}/modifier_groups/${groupId}/modifierOptions`,
+      ],
+      token
+    );
+  } catch (error) {
+    const apiError = error as ApiError;
+    const status = (apiError?.details as any)?.status;
+    if (status === 404 || status === 405) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 function normalizeGroup(group: CloverModifierGroup): ModifierGroup {
@@ -306,6 +334,10 @@ export async function syncCloverMenu(restaurantId: string): Promise<{
         optionMap.set(option.id, normalizeOption(option));
       }
       group.optionIds.push(option.id);
+    }
+    if (group.optionIds.length === 0) {
+      group.requiredMin = 0;
+      group.requiredMax = 0;
     }
   }
 
