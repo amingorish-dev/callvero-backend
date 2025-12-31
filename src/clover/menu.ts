@@ -22,6 +22,7 @@ type CloverModifierGroup = {
   maxRequired?: number;
   min?: number;
   max?: number;
+  modifierOptions?: CloverList<CloverModifierOption>;
 };
 
 type CloverModifierOption = {
@@ -127,7 +128,7 @@ async function fetchWithFallback<T>(
     } catch (error) {
       const apiError = error as ApiError;
       const status = (apiError?.details as any)?.status;
-      if (status === 404) {
+      if (status === 404 || status === 405) {
         lastError = error;
         continue;
       }
@@ -140,20 +141,19 @@ async function fetchWithFallback<T>(
   return [];
 }
 
-async function fetchModifierGroupsForItem(
+async function fetchItemModifierGroups(
   baseUrl: string,
   merchantId: string,
   itemId: string,
   token: string
 ): Promise<CloverModifierGroup[]> {
-  return fetchWithFallback<CloverModifierGroup>(
+  const payload = await cloverGet(
     baseUrl,
-    [
-      `/v3/merchants/${merchantId}/items/${itemId}/modifier_groups`,
-      `/v3/merchants/${merchantId}/items/${itemId}/modifierGroups`,
-    ],
+    `/v3/merchants/${merchantId}/items/${itemId}?expand=modifierGroups,modifierGroups.modifierOptions`,
     token
   );
+  const item = payload as CloverItem;
+  return extractElements<CloverModifierGroup>(item.modifierGroups);
 }
 
 async function fetchModifierOptionsForGroup(
@@ -220,7 +220,7 @@ export async function syncCloverMenu(restaurantId: string): Promise<{
     baseUrl,
     `/v3/merchants/${merchantId}/items`,
     token,
-    "categories,modifierGroups"
+    "categories,modifierGroups,modifierGroups.modifierOptions"
   );
 
   if (items.length === 0) {
@@ -230,6 +230,7 @@ export async function syncCloverMenu(restaurantId: string): Promise<{
   const categoryMap = new Map<string, MenuCategory>();
   const groupMap = new Map<string, ModifierGroup>();
   const optionMap = new Map<string, ModifierOption>();
+  const groupsNeedingOptions = new Set<string>();
   const normalizedItems: MenuItem[] = [];
 
   for (const item of items) {
@@ -256,15 +257,27 @@ export async function syncCloverMenu(restaurantId: string): Promise<{
 
     let groupList = extractElements<CloverModifierGroup>(item.modifierGroups);
     if (groupList.length === 0) {
-      groupList = await fetchModifierGroupsForItem(baseUrl, merchantId, item.id, token);
+      groupList = await fetchItemModifierGroups(baseUrl, merchantId, item.id, token);
     }
 
-    const modifierGroupIds: string[] = [];
+    const modifierGroupIds = new Set<string>();
     for (const group of groupList) {
       if (!group?.id) continue;
-      modifierGroupIds.push(group.id);
-      if (!groupMap.has(group.id)) {
-        groupMap.set(group.id, normalizeGroup(group));
+      modifierGroupIds.add(group.id);
+      const normalizedGroup = groupMap.get(group.id) || normalizeGroup(group);
+      groupMap.set(group.id, normalizedGroup);
+
+      const groupOptions = extractElements<CloverModifierOption>(group.modifierOptions);
+      if (groupOptions.length > 0) {
+        for (const option of groupOptions) {
+          if (!option?.id) continue;
+          if (!optionMap.has(option.id)) {
+            optionMap.set(option.id, normalizeOption(option));
+          }
+          normalizedGroup.optionIds.push(option.id);
+        }
+      } else {
+        groupsNeedingOptions.add(group.id);
       }
     }
 
@@ -273,7 +286,7 @@ export async function syncCloverMenu(restaurantId: string): Promise<{
       name: item.name,
       priceCents: parsePriceCents(item.price),
       description: item.description,
-      modifierGroupIds,
+      modifierGroupIds: Array.from(modifierGroupIds),
       synonyms: [],
       externalIds: {
         clover: {
@@ -283,7 +296,9 @@ export async function syncCloverMenu(restaurantId: string): Promise<{
     });
   }
 
-  for (const group of groupMap.values()) {
+  for (const groupId of groupsNeedingOptions) {
+    const group = groupMap.get(groupId);
+    if (!group) continue;
     const options = await fetchModifierOptionsForGroup(baseUrl, merchantId, group.id, token);
     for (const option of options) {
       if (!option?.id) continue;
