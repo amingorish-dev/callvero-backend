@@ -8,7 +8,6 @@ import { buildDraftSummary, parseMenu, searchMenu, Selection } from "../core/men
 import { parseOrThrow } from "./validation";
 import { buildToastOrderPayload } from "../toast/mapper";
 import { priceOrder, submitOrder } from "../toast/orders";
-import { buildCloverOrderPayload } from "../clover/mapper";
 import { priceOrderClover, submitOrderClover } from "../clover/orders";
 import { getOrderByClientOrderId } from "../core/idempotency";
 import { getTwilioClient } from "../core/twilio";
@@ -202,7 +201,7 @@ toolsRouter.post("/price_order", async (req, res, next) => {
 
     const pricingResponse =
       provider === "clover"
-        ? await priceOrderClover(body.restaurant_id, buildCloverOrderPayload(menuRow.normalized_json, draftPayload))
+        ? await priceOrderClover(menuRow.normalized_json, draftPayload)
         : await priceOrder(body.restaurant_id, buildToastOrderPayload(menuRow.normalized_json, draftPayload));
 
     await db.query("UPDATE orders SET priced_json = $1, status = $2 WHERE id = $3", [pricingResponse, "priced", body.order_id]);
@@ -281,7 +280,7 @@ toolsRouter.post("/submit_order", async (req, res, next) => {
 
     const submitResponse =
       provider === "clover"
-        ? await submitOrderClover(body.restaurant_id, buildCloverOrderPayload(menuRow.normalized_json, draftPayload))
+        ? await submitOrderClover(body.restaurant_id, menuRow.normalized_json, draftPayload)
         : await submitOrder(body.restaurant_id, buildToastOrderPayload(menuRow.normalized_json, draftPayload));
 
     const toastOrderId =

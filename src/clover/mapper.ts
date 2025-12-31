@@ -8,13 +8,34 @@ export type DraftOrder = {
   pickupPhone?: string;
 };
 
-export function buildCloverOrderPayload(menuInput: unknown, draft: DraftOrder): Record<string, unknown> {
+export type CloverLineItemModification = {
+  modifierGroupId: string;
+  modifierOptionId: string;
+};
+
+export type CloverLineItem = {
+  itemId: string;
+  name?: string;
+  quantity: number;
+  modifications: CloverLineItemModification[];
+  specialInstructions?: string;
+};
+
+export type CloverOrderPayload = {
+  orderType: string;
+  title?: string;
+  note?: string;
+  phone?: string;
+  lineItems: CloverLineItem[];
+};
+
+export function buildCloverOrderPayload(menuInput: unknown, draft: DraftOrder): CloverOrderPayload {
   const menu: NormalizedMenu = parseMenu(menuInput);
   const itemIndex = new Map(menu.items.map((item) => [item.id, item] as const));
   const groupIndex = new Map(menu.modifierGroups.map((group) => [group.id, group] as const));
   const optionIndex = new Map(menu.modifierOptions.map((option) => [option.id, option] as const));
 
-  const lineItems = draft.selections.map((selection) => {
+  const lineItems: CloverLineItem[] = draft.selections.map((selection) => {
     const item = itemIndex.get(selection.itemId);
     const cloverItemId = item?.externalIds?.clover?.itemId;
     if (!cloverItemId) {
