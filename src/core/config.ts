@@ -28,6 +28,7 @@ export const config = {
   cloverClientId: process.env.CLOVER_CLIENT_ID || "",
   cloverClientSecret: process.env.CLOVER_CLIENT_SECRET || "",
   cloverRedirectUri: process.env.CLOVER_REDIRECT_URI || "",
+  cloverEnvironment: process.env.CLOVER_ENVIRONMENT || "sandbox",
   cloverSandboxBaseUrl: process.env.CLOVER_SANDBOX_BASE_URL || "https://sandbox.dev.clover.com",
   cloverProdBaseUrl: process.env.CLOVER_PROD_BASE_URL || "https://api.clover.com",
   cloverMock: process.env.CLOVER_MOCK === "true",

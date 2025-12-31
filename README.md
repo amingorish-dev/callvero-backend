@@ -31,6 +31,10 @@ CLOVER_SANDBOX_BASE_URL=https://sandbox.dev.clover.com
 CLOVER_PROD_BASE_URL=https://api.clover.com
 CLOVER_MOCK=true
 CLOVER_TIMEOUT_MS=10000
+CLOVER_CLIENT_ID=
+CLOVER_CLIENT_SECRET=
+CLOVER_REDIRECT_URI=
+CLOVER_ENVIRONMENT=sandbox
 
 # Twilio (optional for SMS)
 TWILIO_ACCOUNT_SID=
@@ -90,6 +94,7 @@ All tool requests must include `restaurant_id` and are validated against tenant 
 - `POST /tools/price_order { restaurant_id, order_id }`
 - `POST /tools/submit_order { restaurant_id, order_id, client_order_id }`
 - `POST /tools/send_sms { to, message }`
+- `GET  /clover/callback?code=...&merchant_id=...&state=<restaurant_id>` (OAuth callback)
 
 ## Normalized menu format
 Stored in `menus.normalized_json`.
@@ -104,13 +109,31 @@ Stored in `menus.normalized_json`.
       "priceCents": 1199,
       "description": "Optional",
       "modifierGroupIds": ["mod-1"],
-      "synonyms": ["burger", "cheeseburger"]
+      "synonyms": ["burger", "cheeseburger"],
+      "externalIds": {
+        "clover": { "itemId": "CLOVER_ITEM_ID" },
+        "toast": { "itemId": "TOAST_ITEM_ID" }
+      }
     }
   ],
   "modifierGroups": [
-    { "id": "mod-1", "name": "Cheese", "requiredMin": 1, "requiredMax": 1, "optionIds": ["opt-1"] }
+    {
+      "id": "mod-1",
+      "name": "Cheese",
+      "requiredMin": 1,
+      "requiredMax": 1,
+      "optionIds": ["opt-1"],
+      "externalIds": { "clover": { "modifierGroupId": "CLOVER_GROUP_ID" } }
+    }
   ],
-  "modifierOptions": [{ "id": "opt-1", "name": "Cheddar", "priceDeltaCents": 0 }]
+  "modifierOptions": [
+    {
+      "id": "opt-1",
+      "name": "Cheddar",
+      "priceDeltaCents": 0,
+      "externalIds": { "clover": { "modifierOptionId": "CLOVER_OPTION_ID" } }
+    }
+  ]
 }
 ```
 
@@ -174,6 +197,20 @@ curl -X POST http://localhost:3000/tools/submit_order \
 ## Add restaurants / phone numbers
 Insert into `restaurants` and `menus` with your restaurant UUID and phone number, then map Toast credentials in `toast_credentials`.
 To use Clover for a tenant, set `restaurants.pos_provider = 'clover'` and insert credentials in `clover_credentials`.
+
+### Clover OAuth (sandbox)
+Set Clover app env vars in your runtime (`CLOVER_CLIENT_ID`, `CLOVER_CLIENT_SECRET`, `CLOVER_REDIRECT_URI`), then authorize:
+
+```text
+https://sandbox.dev.clover.com/oauth/authorize?client_id=<CLOVER_CLIENT_ID>&redirect_uri=<CLOVER_REDIRECT_URI>&state=<restaurant_id>
+```
+
+After approval you should be redirected to:
+```
+<CLOVER_REDIRECT_URI>?code=AUTH_CODE&merchant_id=MERCHANT_ID&state=<restaurant_id>
+```
+
+The callback endpoint `GET /clover/callback` stores the token and merchant ID in `clover_credentials`.
 
 Example SQL:
 ```sql

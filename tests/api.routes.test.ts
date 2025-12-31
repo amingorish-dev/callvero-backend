@@ -17,6 +17,9 @@ const sampleMenu = {
       description: "Beef patty, lettuce, tomato.",
       modifierGroupIds: ["mod-cheese"],
       synonyms: ["burger", "cheeseburger"],
+      externalIds: {
+        clover: { itemId: "clover-item-1" },
+      },
     },
   ],
   modifierGroups: [
@@ -26,11 +29,24 @@ const sampleMenu = {
       requiredMin: 1,
       requiredMax: 1,
       optionIds: ["opt-cheddar", "opt-none"],
+      externalIds: {
+        clover: { modifierGroupId: "clover-group-1" },
+      },
     },
   ],
   modifierOptions: [
-    { id: "opt-cheddar", name: "Cheddar", priceDeltaCents: 0 },
-    { id: "opt-none", name: "No Cheese", priceDeltaCents: 0 },
+    {
+      id: "opt-cheddar",
+      name: "Cheddar",
+      priceDeltaCents: 0,
+      externalIds: { clover: { modifierOptionId: "clover-option-1" } },
+    },
+    {
+      id: "opt-none",
+      name: "No Cheese",
+      priceDeltaCents: 0,
+      externalIds: { clover: { modifierOptionId: "clover-option-2" } },
+    },
   ],
 };
 

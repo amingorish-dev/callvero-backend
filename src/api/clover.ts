@@ -44,10 +44,14 @@ cloverRouter.get("/clover/callback", async (req, res, next) => {
     const merchantId = query.merchant_id;
     const restaurantId = query.restaurant_id || query.state;
 
+    const baseUrl = config.cloverEnvironment.toLowerCase().includes("prod")
+      ? config.cloverProdBaseUrl
+      : config.cloverSandboxBaseUrl;
+
     if (!code || !merchantId) {
       const redirectUri = resolveRedirectUri(req);
       const authorizeUrl = config.cloverClientId
-        ? `${config.cloverSandboxBaseUrl}/oauth/authorize?client_id=${encodeURIComponent(
+        ? `${baseUrl}/oauth/authorize?client_id=${encodeURIComponent(
             config.cloverClientId
           )}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(restaurantId || "")}`
         : null;
@@ -77,7 +81,7 @@ cloverRouter.get("/clover/callback", async (req, res, next) => {
 
     const redirectUri = resolveRedirectUri(req);
     const tokenResponse = await exchangeCloverCode({
-      baseUrl: config.cloverSandboxBaseUrl,
+      baseUrl,
       clientId: config.cloverClientId,
       clientSecret: config.cloverClientSecret,
       code,
@@ -93,7 +97,7 @@ cloverRouter.get("/clover/callback", async (req, res, next) => {
         merchantId,
         config.cloverClientId,
         config.cloverClientSecret,
-        "sandbox",
+        config.cloverEnvironment,
         tokenResponse.accessToken,
         expiresAt.toISOString(),
       ]

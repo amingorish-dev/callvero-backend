@@ -21,6 +21,52 @@ function resolveBaseUrl(environment: string): string {
   return config.cloverSandboxBaseUrl;
 }
 
+export async function exchangeCloverCode(input: {
+  baseUrl: string;
+  clientId: string;
+  clientSecret: string;
+  code: string;
+  redirectUri: string;
+}): Promise<{ accessToken: string; expiresIn: number }> {
+  const authUrl = `${input.baseUrl}/oauth/token`;
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    client_id: input.clientId,
+    client_secret: input.clientSecret,
+    code: input.code,
+    redirect_uri: input.redirectUri,
+  });
+
+  const response = await fetch(authUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: body.toString(),
+  });
+
+  const text = await response.text();
+  let payload: any = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    logger.error({ status: response.status, text }, "clover oauth failed");
+    throw new ApiError(502, "clover oauth failed", { status: response.status, body: payload || text });
+  }
+
+  const token = payload?.access_token || payload?.accessToken;
+  const expiresIn = payload?.expires_in || payload?.expiresIn || 3600;
+  if (!token) {
+    throw new ApiError(502, "clover oauth response missing token", { body: payload || text });
+  }
+
+  return { accessToken: token, expiresIn: Number(expiresIn) };
+}
+
 export async function getCloverToken(restaurantId: string): Promise<{
   token: string;
   baseUrl: string;
@@ -47,46 +93,8 @@ export async function getCloverToken(restaurantId: string): Promise<{
     }
   }
 
-  // TODO: Confirm Clover OAuth flow. This uses client credentials for MVP.
-  const authUrl = `${baseUrl}/oauth/token`;
-  const body = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: creds.client_id,
-    client_secret: creds.client_secret,
-  });
+  // If token expired and no refresh flow available, require re-auth via OAuth callback.
+  throw new ApiError(401, "clover access token expired; re-authorize the merchant");
 
-  const response = await fetch(authUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: body.toString(),
-  });
-
-  const text = await response.text();
-  let payload: any = null;
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    payload = null;
-  }
-
-  if (!response.ok) {
-    logger.error({ status: response.status, text }, "clover auth failed");
-    throw new ApiError(502, "clover auth failed", { status: response.status, body: payload || text });
-  }
-
-  const token = payload?.access_token || payload?.accessToken;
-  const expiresIn = payload?.expires_in || payload?.expiresIn || 3600;
-  if (!token) {
-    throw new ApiError(502, "clover auth response missing token", { body: payload || text });
-  }
-
-  const expiresAt = new Date(Date.now() + Number(expiresIn) * 1000);
-  await db.query(
-    "UPDATE clover_credentials SET access_token = $1, token_expires_at = $2 WHERE restaurant_id = $3",
-    [token, expiresAt.toISOString(), restaurantId]
-  );
-
-  return { token, baseUrl, merchantId: creds.merchant_id };
+  // return { token, baseUrl, merchantId: creds.merchant_id };
 }

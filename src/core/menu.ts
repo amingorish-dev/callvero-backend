@@ -1,5 +1,18 @@
 import { ApiError } from "./errors";
 
+export type ExternalIds = {
+  toast?: {
+    itemId?: string;
+    modifierGroupId?: string;
+    modifierOptionId?: string;
+  };
+  clover?: {
+    itemId?: string;
+    modifierGroupId?: string;
+    modifierOptionId?: string;
+  };
+};
+
 export type MenuCategory = {
   id: string;
   name: string;
@@ -13,6 +26,7 @@ export type MenuItem = {
   description?: string;
   modifierGroupIds: string[];
   synonyms: string[];
+  externalIds?: ExternalIds;
 };
 
 export type ModifierGroup = {
@@ -21,12 +35,14 @@ export type ModifierGroup = {
   requiredMin: number;
   requiredMax: number;
   optionIds: string[];
+  externalIds?: ExternalIds;
 };
 
 export type ModifierOption = {
   id: string;
   name: string;
   priceDeltaCents: number;
+  externalIds?: ExternalIds;
 };
 
 export type NormalizedMenu = {
