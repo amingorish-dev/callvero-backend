@@ -41,7 +41,13 @@ inboundRouter.post("/inbound", async (req, res, next) => {
     const hostHeader = req.headers["x-forwarded-host"] || req.headers.host || "";
     const host = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
     const wsProto = proto === "https" ? "wss" : "ws";
-    const wsUrl = `${wsProto}://${host}/twilio-stream`;
+    const wsUrl = new URL(`${wsProto}://${host}/twilio-stream`);
+    wsUrl.searchParams.set("restaurant_id", restaurant.id);
+    if (callId) {
+      wsUrl.searchParams.set("call_id", callId);
+    }
+    wsUrl.searchParams.set("from", body.From);
+    wsUrl.searchParams.set("to", body.To);
 
     const twiml =
       config.vapiApiKey && config.vapiAssistantId
@@ -49,7 +55,7 @@ inboundRouter.post("/inbound", async (req, res, next) => {
 <Response>
   <Say voice="alice">Connecting you to our AI assistant now.</Say>
   <Connect>
-    <Stream url="${escapeXml(wsUrl)}">
+    <Stream url="${escapeXml(wsUrl.toString())}">
       <Parameter name="restaurant_id" value="${escapeXml(restaurant.id)}" />
       <Parameter name="call_id" value="${escapeXml(callId || "")}" />
       <Parameter name="from" value="${escapeXml(body.From)}" />

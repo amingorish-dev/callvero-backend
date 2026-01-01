@@ -6,6 +6,7 @@ import { logger } from "../core/logger";
 type TwilioStreamStart = {
   streamSid?: string;
   customParameters?: Record<string, string>;
+  custom_parameters?: Record<string, string>;
 };
 
 type TwilioMessage = {
@@ -88,13 +89,24 @@ async function createVapiWebsocketCallUrl(metadata?: Record<string, string>): Pr
   return wsUrl;
 }
 
+function extractQueryParams(reqUrl: string | undefined): Record<string, string> {
+  if (!reqUrl) return {};
+  const url = new URL(reqUrl, "http://localhost");
+  const params: Record<string, string> = {};
+  for (const [key, value] of url.searchParams.entries()) {
+    if (value) params[key] = value;
+  }
+  return params;
+}
+
 export function attachTwilioStreamServer(server: http.Server) {
   const wss = new WebSocketServer({ server, path: "/twilio-stream" });
 
-  wss.on("connection", (twilioWs) => {
+  wss.on("connection", (twilioWs, req) => {
     let streamSid: string | null = null;
     let vapiWs: WebSocket | null = null;
     let vapiReady = false;
+    const queryParams = extractQueryParams(req.url);
 
     const cleanup = () => {
       try {
@@ -126,7 +138,12 @@ export function attachTwilioStreamServer(server: http.Server) {
 
       if (msg.event === "start") {
         streamSid = msg.start?.streamSid || null;
-        const metadata = msg.start?.customParameters || {};
+        const metadata: Record<string, string> = { ...queryParams };
+        const startParams = msg.start?.customParameters || msg.start?.custom_parameters || {};
+        Object.assign(metadata, startParams);
+        if (!metadata.restaurant_id) {
+          logger.warn({ metadata }, "twilio stream missing restaurant_id metadata");
+        }
 
         try {
           const vapiUrl = await createVapiWebsocketCallUrl(metadata);
