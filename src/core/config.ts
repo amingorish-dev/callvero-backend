@@ -33,6 +33,8 @@ export const config = {
   cloverProdBaseUrl: process.env.CLOVER_PROD_BASE_URL || "https://api.clover.com",
   cloverMock: process.env.CLOVER_MOCK === "true",
   cloverTimeoutMs: optionalNumber("CLOVER_TIMEOUT_MS", 10000),
+  vapiApiKey: process.env.VAPI_API_KEY || "",
+  vapiAssistantId: process.env.VAPI_ASSISTANT_ID || "",
   twilioAccountSid: process.env.TWILIO_ACCOUNT_SID || "",
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN || "",
   twilioFromNumber: process.env.TWILIO_FROM_NUMBER || "",

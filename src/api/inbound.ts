@@ -4,6 +4,7 @@ import { db } from "../db/client";
 import { ApiError } from "../core/errors";
 import { getRestaurantByPhone } from "../core/tenant";
 import { parseOrThrow } from "./validation";
+import { config } from "../core/config";
 
 export const inboundRouter = Router();
 
@@ -33,10 +34,30 @@ inboundRouter.post("/inbound", async (req, res, next) => {
       "INSERT INTO calls (restaurant_id, from_number, to_number) VALUES ($1, $2, $3) RETURNING id",
       [restaurant.id, body.From, body.To]
     );
-    const callId = callResult.rows[0]?.id;
+  const callId = callResult.rows[0]?.id;
 
-    // Example: start Vapi with metadata { restaurant_id, call_id } via your telephony layer.
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+    const protoHeader = req.headers["x-forwarded-proto"];
+    const proto = Array.isArray(protoHeader) ? protoHeader[0] : protoHeader || "https";
+    const hostHeader = req.headers["x-forwarded-host"] || req.headers.host || "";
+    const host = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
+    const wsProto = proto === "https" ? "wss" : "ws";
+    const wsUrl = `${wsProto}://${host}/twilio-stream`;
+
+    const twiml =
+      config.vapiApiKey && config.vapiAssistantId
+        ? `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">Connecting you to our AI assistant now.</Say>
+  <Connect>
+    <Stream url="${escapeXml(wsUrl)}">
+      <Parameter name="restaurant_id" value="${escapeXml(restaurant.id)}" />
+      <Parameter name="call_id" value="${escapeXml(callId || "")}" />
+      <Parameter name="from" value="${escapeXml(body.From)}" />
+      <Parameter name="to" value="${escapeXml(body.To)}" />
+    </Stream>
+  </Connect>
+</Response>`
+        : `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="alice">Thanks for calling ${escapeXml(restaurant.name)}. Connecting you now.</Say>
 </Response>`;
