@@ -38,9 +38,16 @@ const selectionSchema = z.object({
   specialInstructions: z.string().min(1).optional(),
 });
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const isUuid = (value: string | null | undefined): value is string => {
+  if (!value) return false;
+  return uuidPattern.test(value);
+};
+
 const draftSchema = z.object({
   restaurant_id: z.string().uuid(),
-  call_id: z.string().uuid(),
+  call_id: z.string().optional(),
   selections: z.array(selectionSchema).min(1),
   notes: z.string().optional(),
   pickup_name: z.string().optional(),
@@ -128,13 +135,25 @@ toolsRouter.post("/draft_order", async (req, res, next) => {
     const body = parseOrThrow(draftSchema, req.body);
     await requireRestaurantById(body.restaurant_id);
 
-    const callResult = await db.query<{ id: string; restaurant_id: string }>(
-      "SELECT id, restaurant_id FROM calls WHERE id = $1",
-      [body.call_id]
-    );
-    const call = callResult.rows[0];
-    if (!call || call.restaurant_id !== body.restaurant_id) {
-      throw new ApiError(404, "call not found for restaurant");
+    let callId = isUuid(body.call_id) ? body.call_id : null;
+    if (callId) {
+      const callResult = await db.query<{ id: string; restaurant_id: string }>(
+        "SELECT id, restaurant_id FROM calls WHERE id = $1",
+        [callId]
+      );
+      const call = callResult.rows[0];
+      if (!call || call.restaurant_id !== body.restaurant_id) {
+        throw new ApiError(404, "call not found for restaurant");
+      }
+    } else {
+      const latestCall = await db.query<{ id: string }>(
+        "SELECT id FROM calls WHERE restaurant_id = $1 ORDER BY started_at DESC LIMIT 1",
+        [body.restaurant_id]
+      );
+      callId = latestCall.rows[0]?.id ?? null;
+      if (!callId) {
+        throw new ApiError(404, "call not found for restaurant");
+      }
     }
 
     const menuRow = await requireMenuForRestaurant(body.restaurant_id);
@@ -154,7 +173,7 @@ toolsRouter.post("/draft_order", async (req, res, next) => {
 
     await db.query(
       "INSERT INTO orders (id, restaurant_id, call_id, status, draft_json, client_order_id) VALUES ($1, $2, $3, $4, $5, $6)",
-      [orderId, body.restaurant_id, body.call_id, "draft", draftJson, clientOrderId]
+      [orderId, body.restaurant_id, callId, "draft", draftJson, clientOrderId]
     );
 
     res.json({
